@@ -1,0 +1,234 @@
+m255
+K4
+z2
+!s11f vlog 2020.1 2020.02, Feb 28 2020
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/simulation/questa
+vdebounce
+Z1 !s110 1747333359
+!i10b 1
+!s100 _:GkUdnbU^WWen;M6:MD:0
+Z2 !s11b Dg1SIo80bB@j0V0VzS_@n1
+IfU_DPi0mdiLW]AR@YmbBz0
+Z3 VDg1SIo80bB@j0V0VzS_@n1
+R0
+Z4 w1747304040
+8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v
+FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v
+!i122 3
+L0 1 38
+Z5 OV;L;2020.1;71
+r1
+!s85 0
+31
+Z6 !s108 1747333359.000000
+!s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v|
+!s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v|
+!i113 1
+Z7 o-vlog01compat -work work
+Z8 !s92 -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code
+Z9 tCvgOpt 0
+vfont_rom_digits
+R1
+!i10b 1
+!s100 Ufj0AN0oj9?b2SO4?DC`:1
+R2
+Ig9@iD;VO6OUI@<DDEhcSD1
+R3
+R0
+R4
+8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v
+FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v
+!i122 2
+Z10 L0 1 21
+R5
+r1
+!s85 0
+31
+R6
+!s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v|
+!s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v|
+!i113 1
+R7
+R8
+R9
+vIntegrated_Code
+R1
+!i10b 1
+!s100 ]NJn_M]]WzB>]]_dOB8`F1
+R2
+IU]maANK@Nbi@HmFNmH7hN1
+R3
+R0
+w1747313679
+8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v
+FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v
+!i122 5
+L0 2 727
+R5
+r1
+!s85 0
+31
+R6
+!s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v|
+!s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v|
+!i113 1
+R7
+R8
+R9
+n@integrated_@code
+vIntegrated_Code_tb
+R1
+!i10b 1
+!s100 JDn88n<o7]N<Yh2AYl;Pz3
+R2
+InRP7z4zFS8eJ<C9mXI8_l1
+R3
+R0
+w1747333299
+8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v
+FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v
+!i122 4
+L0 3 74
+R5
+r1
+!s85 0
+31
+R6
+!s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v|
+!s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v|
+!i113 1
+R7
+R8
+R9
+n@integrated_@code_tb
+vLT24Display
+R1
+!i10b 1
+!s100 eiS[zSe70Pbd<=fZ;dRc32
+R2
+I2<FgRe1IzVYP5NW0YcQo63
+R3
+R0
+R4
+Z11 8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v
+Z12 FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v
+!i122 1
+L0 86 310
+R5
+r1
+!s85 0
+31
+R6
+Z13 !s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v|
+Z14 !s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v|
+!i113 1
+R7
+R8
+R9
+n@l@t24@display
+vLT24DisplayInterface
+R1
+!i10b 1
+!s100 R=n6f_Ei1Un_`3cimNO>]3
+R2
+I>9zDMboFmjVgjc60NNT4l0
+R3
+R0
+R4
+R11
+R12
+!i122 1
+L0 409 75
+R5
+r1
+!s85 0
+31
+R6
+R13
+R14
+!i113 1
+R7
+R8
+R9
+n@l@t24@display@interface
+vLT24InitialData
+R1
+!i10b 1
+!s100 nDTkMQTE<]PZlTkzz>RMP1
+R2
+I54RM[D1W]6LQck20:K;?Y0
+R3
+R0
+R4
+R11
+R12
+!i122 1
+L0 523 136
+R5
+r1
+!s85 0
+31
+R6
+R13
+R14
+!i113 1
+R7
+R8
+R9
+n@l@t24@initial@data
+vResetSynchroniser
+R1
+!i10b 1
+!s100 VSzh>`O`62j1K@2FTSC@l0
+R2
+IKMXAcg@FA4=f9[VA734JJ1
+R3
+R0
+R4
+R11
+R12
+!i122 1
+L0 493 21
+R5
+r1
+!s85 0
+31
+R6
+R13
+R14
+!i113 1
+R7
+R8
+R9
+n@reset@synchroniser
+vUpCounterNbit
+!s110 1747333358
+!i10b 1
+!s100 _JO9YfS8SZi13ND5CZ?an3
+R2
+I[h:O`[49f3hM6j]aIfB5M3
+R3
+R0
+R4
+8C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v
+FC:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v
+!i122 0
+R10
+R5
+r1
+!s85 0
+31
+!s108 1747333358.000000
+!s107 C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v|
+!s90 -reportprogress|300|-vlog01compat|-work|work|+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code|C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v|
+!i113 1
+R7
+R8
+R9
+n@up@counter@nbit

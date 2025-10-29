@@ -1,0 +1,728 @@
+
+module Integrated_Code (
+    input              clock,          // 50 MHz clock
+    input      [3:0]   KEY,            // KEY0 to KEY3 (active low, KEY0 for cursor down/short, reset/long)
+    input      [9:0]   SW,             // SW0 for image to puzzle, SW1 to SW9 for numbers
+    output             resetApp,       // Internal reset signal for LT24
+    output             LT24Wr_n,       // LT24 write strobe (active low)
+    output             LT24Rd_n,       // LT24 read strobe (active low)
+    output             LT24CS_n,       // LT24 chip select (active low)
+    output             LT24RS,         // LT24 register select
+    output             LT24Reset_n,    // LT24 reset (active low)
+    output [15:0]      LT24Data,       // LT24 16-bit data bus
+    output             LT24LCDOn,      // LT24 power on
+    output reg [3:0]   debug_state,    // Debug output for FSM state
+    output reg         pwm,            // PWM output for servo
+    output reg         debug_key0_held  // Debug output for key0_held
+);
+
+    localparam LCD_WIDTH  = 240;
+    localparam LCD_HEIGHT = 320;
+    localparam CELL_SIZE  = 26;
+    localparam GRID_SIZE  = CELL_SIZE * 9;
+    localparam MARGIN_X   = (LCD_WIDTH  - GRID_SIZE) / 2; // 3
+    localparam MARGIN_Y   = (LCD_HEIGHT - GRID_SIZE) / 2; // 43
+    localparam TOTAL_PIXELS = LCD_WIDTH * LCD_HEIGHT; // 76,800
+
+    // Sudoku board: 0 means empty cell
+    reg [3:0] sudokuBoard [0:8][0:8];
+    // Fixed cells: 1 means fixed (non-editable, green), 0 means editable (red)
+    reg fixedBoard [0:8][0:8];
+    // Solution grid: Stores the complete Sudoku solution
+    reg [3:0] solutionBoard [0:8][0:8];
+
+    // Image RAM for initial display (synchronous read)
+    (* ramstyle = "M10K" *) reg [15:0] imageRAM [0:TOTAL_PIXELS-1];
+    initial begin
+        $readmemh("maze.hex", imageRAM);
+    end
+    reg [16:0] ram_addr;
+    reg [15:0] ram_data;
+
+    // FSM states
+    localparam IMAGE = 2'd0, INIT = 2'd1, INPUT = 2'd2, DONE = 2'd3;
+    reg [1:0] state;
+
+    // Difficulty levels
+    localparam EASY = 2'd0, MEDIUM = 2'd1, HARD = 2'd2;
+    reg [1:0] level;
+
+    // Cursor position (starts at center: row 4, col 4)
+    reg [3:0] cursor_row;
+    reg [3:0] cursor_col;
+
+    // Key and switch debouncing
+    wire [3:0] debounced_keys;
+    wire [9:0] debounced_sw;
+    genvar i;
+    generate
+        for (i = 0; i < 4; i = i + 1) begin : debounce_keys
+            debounce db_inst (
+                .clk(clock),
+                .reset(reset_signal),
+                .button_in(~KEY[i]),
+                .button_out(debounced_keys[i])
+            );
+        end
+        for (i = 0; i < 10; i = i + 1) begin : debounce_sw
+            debounce db_sw_inst (
+                .clk(clock),
+                .reset(reset_signal),
+                .button_in(SW[i]),
+                .button_out(debounced_sw[i])
+            );
+        end
+    endgenerate
+
+    // Detect key and switch presses (rising edge)
+    reg [3:0] key_prev;
+    reg [9:0] sw_prev;
+    wire [3:0] key_press = debounced_keys & ~key_prev;
+    wire [9:0] sw_press = debounced_sw & ~sw_prev;
+
+    // SW0 edge detection for state transition
+    reg sw0_prev;
+    wire sw0_press = debounced_sw[0] & ~sw0_prev;
+
+    // KEY[0] short/long press detection
+    localparam SHORT_PRESS_CYCLES = 25_000_000; // 500ms at 50 MHz
+    reg [25:0] key0_counter;
+    reg key0_held;
+    reg reset_signal;
+    reg key0_short_press;
+
+    always @(posedge clock) begin
+        if (debounced_keys[0]) begin
+            if (key0_counter < SHORT_PRESS_CYCLES) begin
+                key0_counter <= key0_counter + 26'd1;
+            end
+            if (key0_counter >= SHORT_PRESS_CYCLES) begin
+                key0_held <= 1'b1;
+                reset_signal <= 1'b1;
+                debug_key0_held <= 1'b1;
+            end
+        end else begin
+            if (key0_counter > 0 && key0_counter < SHORT_PRESS_CYCLES && !key0_held) begin
+                key0_short_press <= 1'b1;
+            end else begin
+                key0_short_press <= 1'b0;
+            end
+            reset_signal <= 1'b0;
+            key0_counter <= 26'd0;
+            key0_held <= 1'b0;
+            debug_key0_held <= 1'b0;
+        end
+    end
+
+    // Check if the puzzle is solved
+    reg puzzle_solved;
+    always @* begin
+        puzzle_solved = 1'b1;
+        begin : check_solution
+            integer r, c;
+            for (r = 0; r < 9; r = r + 1)
+                for (c = 0; c < 9; c = c + 1) begin
+                    if (sudokuBoard[r][c] != solutionBoard[r][c]) begin
+                        puzzle_solved = 1'b0;
+                        disable check_solution;
+                    end
+                end
+        end
+    end
+
+    // Servo PWM parameters
+    localparam CLK_FREQ = 50_000_000; // 50 MHz clock
+    localparam PWM_PERIOD_MS = 20;    // 20ms PWM period
+    localparam PWM_PERIOD = CLK_FREQ * PWM_PERIOD_MS / 1000; // 1,000,000 cycles
+    localparam PULSE_0 = 50_000;      // 1ms pulse for 0 degrees
+    localparam PULSE_90 = 75_000;     // 1.5ms pulse for 90 degrees
+    localparam PULSE_180 = 100_000;   // 2ms pulse for 180 degrees
+
+    // Servo PWM counter
+    reg [19:0] pwm_counter;
+
+    // Generate PWM signal based on level
+    always @(posedge clock or posedge reset_signal) begin
+        if (reset_signal) begin
+            pwm_counter <= 20'd0;
+            pwm <= 1'b0;
+        end else begin
+            pwm_counter <= pwm_counter + 20'd1;
+            if (pwm_counter >= PWM_PERIOD - 1) begin
+                pwm_counter <= 20'd0;
+            end
+
+            // Set PWM pulse width based on level (no PWM in IMAGE state)
+            if (state != IMAGE) begin
+                case (level)
+                    EASY:   pwm <= (pwm_counter < PULSE_0) ? 1'b1 : 1'b0;   // 0 degrees
+                    MEDIUM: pwm <= (pwm_counter < PULSE_90) ? 1'b1 : 1'b0;  // 90 degrees
+                    HARD:   pwm <= (pwm_counter < PULSE_180) ? 1'b1 : 1'b0; // 180 degrees
+                    default: pwm <= 1'b0;
+                endcase
+            end else begin
+                pwm <= 1'b0; // Servo off in IMAGE state
+            end
+        end
+    end
+
+    // Handle initialization and user input
+    always @(posedge clock) begin
+        sw0_prev <= debounced_sw[0]; // For SW0 edge detection
+        if (reset_signal) begin
+            state <= IMAGE;
+            level <= EASY;
+            cursor_row <= 4'd4;
+            cursor_col <= 4'd4;
+            key_prev <= 4'b0;
+            sw_prev <= 10'b0;
+            debug_state <= 4'd0;
+        end else begin
+            key_prev <= debounced_keys;
+            sw_prev <= debounced_sw;
+            debug_state <= {2'b0, state};
+            case (state)
+                IMAGE: begin
+                    if (sw0_press) begin
+                        state <= INIT;
+                        level <= EASY; // Ensure Easy puzzle on SW0 toggle
+                    end
+                end
+                INIT: begin
+                    // Initialize board with a partial Sudoku puzzle based on level
+                    begin : init_board
+                        integer r, c;
+                        for (r = 0; r < 9; r = r + 1)
+                            for (c = 0; c < 9; c = c + 1) begin
+                                sudokuBoard[r][c] <= 4'd0;
+                                fixedBoard[r][c] <= 1'b0;
+                                solutionBoard[r][c] <= 4'd0;
+                            end
+                    end
+                    case (level)
+                        EASY: begin
+                            // Easy puzzle (71 clues, 10 blanks)
+                            sudokuBoard[0][0] <= 4'd5; fixedBoard[0][0] <= 1'b1;
+                            sudokuBoard[0][1] <= 4'd3; fixedBoard[0][1] <= 1'b1;
+                            sudokuBoard[0][2] <= 4'd4; fixedBoard[0][2] <= 1'b1;
+                            sudokuBoard[0][3] <= 4'd6; fixedBoard[0][3] <= 1'b1;
+                            sudokuBoard[0][4] <= 4'd7; fixedBoard[0][4] <= 1'b1;
+                            sudokuBoard[0][5] <= 4'd8; fixedBoard[0][5] <= 1'b1;
+                            sudokuBoard[0][6] <= 4'd9; fixedBoard[0][6] <= 1'b1;
+                            sudokuBoard[0][7] <= 4'd1; fixedBoard[0][7] <= 1'b1;
+                            sudokuBoard[0][8] <= 4'd2; fixedBoard[0][8] <= 1'b1;
+                            sudokuBoard[1][0] <= 4'd6; fixedBoard[1][0] <= 1'b1;
+                            sudokuBoard[1][1] <= 4'd7; fixedBoard[1][1] <= 1'b1;
+                            sudokuBoard[1][2] <= 4'd2; fixedBoard[1][2] <= 1'b1;
+                            sudokuBoard[1][3] <= 4'd1; fixedBoard[1][3] <= 1'b1;
+                            sudokuBoard[1][4] <= 4'd9; fixedBoard[1][4] <= 1'b1;
+                            sudokuBoard[1][5] <= 4'd5; fixedBoard[1][5] <= 1'b1;
+                            sudokuBoard[1][6] <= 4'd3; fixedBoard[1][6] <= 1'b1;
+                            sudokuBoard[1][7] <= 4'd4; fixedBoard[1][7] <= 1'b1;
+                            sudokuBoard[1][8] <= 4'd8; fixedBoard[1][8] <= 1'b1;
+                            sudokuBoard[2][0] <= 4'd1; fixedBoard[2][0] <= 1'b1;
+                            sudokuBoard[2][1] <= 4'd9; fixedBoard[2][1] <= 1'b1;
+                            sudokuBoard[2][2] <= 4'd8; fixedBoard[2][2] <= 1'b1;
+                            sudokuBoard[2][3] <= 4'd3; fixedBoard[2][3] <= 1'b1;
+                            sudokuBoard[2][4] <= 4'd4; fixedBoard[2][4] <= 1'b1;
+                            sudokuBoard[2][5] <= 4'd2; fixedBoard[2][5] <= 1'b1;
+                            sudokuBoard[2][6] <= 4'd5; fixedBoard[2][6] <= 1'b1;
+                            sudokuBoard[2][7] <= 4'd6; fixedBoard[2][7] <= 1'b1;
+                            sudokuBoard[2][8] <= 4'd7; fixedBoard[2][8] <= 1'b1;
+                            sudokuBoard[3][0] <= 4'd8; fixedBoard[3][0] <= 1'b1;
+                            sudokuBoard[3][1] <= 4'd5; fixedBoard[3][1] <= 1'b1;
+                            sudokuBoard[3][2] <= 4'd9; fixedBoard[3][2] <= 1'b1;
+                            sudokuBoard[3][3] <= 4'd7; fixedBoard[3][3] <= 1'b1;
+                            sudokuBoard[3][4] <= 4'd6; fixedBoard[3][4] <= 1'b1;
+                            sudokuBoard[3][5] <= 4'd1; fixedBoard[3][5] <= 1'b1;
+                            sudokuBoard[3][6] <= 4'd4; fixedBoard[3][6] <= 1'b1;
+                            sudokuBoard[3][7] <= 4'd2; fixedBoard[3][7] <= 1'b1;
+                            sudokuBoard[3][8] <= 4'd3; fixedBoard[3][8] <= 1'b1;
+                            sudokuBoard[4][0] <= 4'd4; fixedBoard[4][0] <= 1'b1;
+                            sudokuBoard[4][1] <= 4'd2; fixedBoard[4][1] <= 1'b1;
+                            sudokuBoard[4][2] <= 4'd6; fixedBoard[4][2] <= 1'b1;
+                            sudokuBoard[4][3] <= 4'd8; fixedBoard[4][3] <= 1'b1;
+                            sudokuBoard[4][4] <= 4'd5; fixedBoard[4][4] <= 1'b1;
+                            sudokuBoard[4][5] <= 4'd3; fixedBoard[4][5] <= 1'b1;
+                            sudokuBoard[4][6] <= 4'd7; fixedBoard[4][6] <= 1'b1;
+                            sudokuBoard[4][7] <= 4'd9; fixedBoard[4][7] <= 1'b1;
+                            sudokuBoard[4][8] <= 4'd1; fixedBoard[4][8] <= 1'b1;
+                            sudokuBoard[5][0] <= 4'd7; fixedBoard[5][0] <= 1'b1;
+                            sudokuBoard[5][1] <= 4'd1; fixedBoard[5][1] <= 1'b1;
+                            sudokuBoard[5][2] <= 4'd3; fixedBoard[5][2] <= 1'b1;
+                            sudokuBoard[5][3] <= 4'd9; fixedBoard[5][3] <= 1'b1;
+                            sudokuBoard[5][4] <= 4'd2; fixedBoard[5][4] <= 1'b1;
+                            sudokuBoard[5][5] <= 4'd4; fixedBoard[5][5] <= 1'b1;
+                            sudokuBoard[5][6] <= 4'd8; fixedBoard[5][6] <= 1'b1;
+                            sudokuBoard[5][7] <= 4'd5; fixedBoard[5][7] <= 1'b1;
+                            sudokuBoard[5][8] <= 4'd6; fixedBoard[5][8] <= 1'b1;
+                            sudokuBoard[6][0] <= 4'd9; fixedBoard[6][0] <= 1'b1;
+                            sudokuBoard[6][1] <= 4'd6; fixedBoard[6][1] <= 1'b1;
+                            sudokuBoard[6][2] <= 4'd1; fixedBoard[6][2] <= 1'b1;
+                            sudokuBoard[6][3] <= 4'd5; fixedBoard[6][3] <= 1'b1;
+                            sudokuBoard[6][4] <= 4'd3; fixedBoard[6][4] <= 1'b1;
+                            sudokuBoard[6][5] <= 4'd7; fixedBoard[6][5] <= 1'b1;
+                            sudokuBoard[6][6] <= 4'd2; fixedBoard[6][6] <= 1'b1;
+                            sudokuBoard[6][7] <= 4'd8; fixedBoard[6][7] <= 1'b1;
+                            sudokuBoard[6][8] <= 4'd4; fixedBoard[6][8] <= 1'b1;
+                            sudokuBoard[7][0] <= 4'd2; fixedBoard[7][0] <= 1'b1;
+                            sudokuBoard[7][1] <= 4'd8; fixedBoard[7][1] <= 1'b1;
+                            sudokuBoard[7][2] <= 4'd7; fixedBoard[7][2] <= 1'b1;
+                            sudokuBoard[7][3] <= 4'd4; fixedBoard[7][3] <= 1'b1;
+                            sudokuBoard[7][4] <= 4'd1; fixedBoard[7][4] <= 1'b1;
+                            sudokuBoard[7][5] <= 4'd9; fixedBoard[7][5] <= 1'b1;
+                            sudokuBoard[7][7] <= 4'd3; fixedBoard[7][7] <= 1'b1;
+                            sudokuBoard[7][8] <= 4'd5; fixedBoard[7][8] <= 1'b1;
+                            sudokuBoard[8][0] <= 4'd3; fixedBoard[8][0] <= 1'b1;
+                            sudokuBoard[8][1] <= 4'd4; fixedBoard[8][1] <= 1'b1;
+                            sudokuBoard[8][3] <= 4'd2; fixedBoard[8][3] <= 1'b1;
+                            sudokuBoard[8][4] <= 4'd8; fixedBoard[8][4] <= 1'b1;
+                            sudokuBoard[8][6] <= 4'd1; fixedBoard[8][6] <= 1'b1;
+                            sudokuBoard[8][7] <= 4'd7; fixedBoard[8][7] <= 1'b1;
+                            sudokuBoard[8][8] <= 4'd9; fixedBoard[8][8] <= 1'b1;
+
+                            // Easy solution
+                            solutionBoard[0][0] <= 4'd5; solutionBoard[0][1] <= 4'd3; solutionBoard[0][2] <= 4'd4;
+                            solutionBoard[0][3] <= 4'd6; solutionBoard[0][4] <= 4'd7; solutionBoard[0][5] <= 4'd8;
+                            solutionBoard[0][6] <= 4'd9; solutionBoard[0][7] <= 4'd1; solutionBoard[0][8] <= 4'd2;
+                            solutionBoard[1][0] <= 4'd6; solutionBoard[1][1] <= 4'd7; solutionBoard[1][2] <= 4'd2;
+                            solutionBoard[1][3] <= 4'd1; solutionBoard[1][4] <= 4'd9; solutionBoard[1][5] <= 4'd5;
+                            solutionBoard[1][6] <= 4'd3; solutionBoard[1][7] <= 4'd4; solutionBoard[1][8] <= 4'd8;
+                            solutionBoard[2][0] <= 4'd1; solutionBoard[2][1] <= 4'd9; solutionBoard[2][2] <= 4'd8;
+                            solutionBoard[2][3] <= 4'd3; solutionBoard[2][4] <= 4'd4; solutionBoard[2][5] <= 4'd2;
+                            solutionBoard[2][6] <= 4'd5; solutionBoard[2][7] <= 4'd6; solutionBoard[2][8] <= 4'd7;
+                            solutionBoard[3][0] <= 4'd8; solutionBoard[3][1] <= 4'd5; solutionBoard[3][2] <= 4'd9;
+                            solutionBoard[3][3] <= 4'd7; solutionBoard[3][4] <= 4'd6; solutionBoard[3][5] <= 4'd1;
+                            solutionBoard[3][6] <= 4'd4; solutionBoard[3][7] <= 4'd2; solutionBoard[3][8] <= 4'd3;
+                            solutionBoard[4][0] <= 4'd4; solutionBoard[4][1] <= 4'd2; solutionBoard[4][2] <= 4'd6;
+                            solutionBoard[4][3] <= 4'd8; solutionBoard[4][4] <= 4'd5; solutionBoard[4][5] <= 4'd3;
+                            solutionBoard[4][6] <= 4'd7; solutionBoard[4][7] <= 4'd9; solutionBoard[4][8] <= 4'd1;
+                            solutionBoard[5][0] <= 4'd7; solutionBoard[5][1] <= 4'd1; solutionBoard[5][2] <= 4'd3;
+                            solutionBoard[5][3] <= 4'd9; solutionBoard[5][4] <= 4'd2; solutionBoard[5][5] <= 4'd4;
+                            solutionBoard[5][6] <= 4'd8; solutionBoard[5][7] <= 4'd5; solutionBoard[5][8] <= 4'd6;
+                            solutionBoard[6][0] <= 4'd9; solutionBoard[6][1] <= 4'd6; solutionBoard[6][2] <= 4'd1;
+                            solutionBoard[6][3] <= 4'd5; solutionBoard[6][4] <= 4'd3; solutionBoard[6][5] <= 4'd7;
+                            solutionBoard[6][6] <= 4'd2; solutionBoard[6][7] <= 4'd8; solutionBoard[6][8] <= 4'd4;
+                            solutionBoard[7][0] <= 4'd2; solutionBoard[7][1] <= 4'd8; solutionBoard[7][2] <= 4'd7;
+                            solutionBoard[7][3] <= 4'd4; solutionBoard[7][4] <= 4'd1; solutionBoard[7][5] <= 4'd9;
+                            solutionBoard[7][6] <= 4'd6; solutionBoard[7][7] <= 4'd3; solutionBoard[7][8] <= 4'd5;
+                            solutionBoard[8][0] <= 4'd3; solutionBoard[8][1] <= 4'd4; solutionBoard[8][2] <= 4'd5;
+                            solutionBoard[8][3] <= 4'd2; solutionBoard[8][4] <= 4'd8; solutionBoard[8][5] <= 4'd6;
+                            solutionBoard[8][6] <= 4'd1; solutionBoard[8][7] <= 4'd7; solutionBoard[8][8] <= 4'd9;
+                        end
+                        MEDIUM: begin
+                            // Medium puzzle (61 clues, 20 blanks)
+                            sudokuBoard[0][0] <= 4'd5; fixedBoard[0][0] <= 1'b1;
+                            sudokuBoard[0][1] <= 4'd3; fixedBoard[0][1] <= 1'b1;
+                            sudokuBoard[0][2] <= 4'd4; fixedBoard[0][2] <= 1'b1;
+                            sudokuBoard[0][3] <= 4'd6; fixedBoard[0][3] <= 1'b1;
+                            sudokuBoard[0][5] <= 4'd7; fixedBoard[0][5] <= 1'b1;
+                            sudokuBoard[0][7] <= 4'd9; fixedBoard[0][7] <= 1'b1;
+                            sudokuBoard[0][8] <= 4'd6; fixedBoard[0][8] <= 1'b1;
+                            sudokuBoard[1][0] <= 4'd9; fixedBoard[1][0] <= 1'b1;
+                            sudokuBoard[1][2] <= 4'd8; fixedBoard[1][2] <= 1'b1;
+                            sudokuBoard[1][4] <= 4'd6; fixedBoard[1][4] <= 1'b1;
+                            sudokuBoard[1][7] <= 4'd5; fixedBoard[1][7] <= 1'b1;
+                            sudokuBoard[1][8] <= 4'd3; fixedBoard[1][8] <= 1'b1;
+                            sudokuBoard[2][0] <= 4'd1; fixedBoard[2][0] <= 1'b1;
+                            sudokuBoard[2][1] <= 4'd6; fixedBoard[2][1] <= 1'b1;
+                            sudokuBoard[2][3] <= 4'd9; fixedBoard[2][3] <= 1'b1;
+                            sudokuBoard[2][5] <= 4'd3; fixedBoard[2][5] <= 1'b1;
+                            sudokuBoard[2][7] <= 4'd8; fixedBoard[2][7] <= 1'b1;
+                            sudokuBoard[2][8] <= 4'd4; fixedBoard[2][8] <= 1'b1;
+                            sudokuBoard[3][0] <= 4'd8; fixedBoard[3][0] <= 1'b1;
+                            sudokuBoard[3][2] <= 4'd9; fixedBoard[3][2] <= 1'b1;
+                            sudokuBoard[3][3] <= 4'd6; fixedBoard[3][3] <= 1'b1;
+                            sudokuBoard[3][5] <= 4'd1; fixedBoard[3][5] <= 1'b1;
+                            sudokuBoard[3][6] <= 4'd3; fixedBoard[3][6] <= 1'b1;
+                            sudokuBoard[3][8] <= 4'd5; fixedBoard[3][8] <= 1'b1;
+                            sudokuBoard[4][1] <= 4'd4; fixedBoard[4][1] <= 1'b1;
+                            sudokuBoard[4][2] <= 4'd3; fixedBoard[4][2] <= 1'b1;
+                            sudokuBoard[4][3] <= 4'd8; fixedBoard[4][3] <= 1'b1;
+                            sudokuBoard[4][5] <= 4'd9; fixedBoard[4][5] <= 1'b1;
+                            sudokuBoard[4][6] <= 4'd6; fixedBoard[4][6] <= 1'b1;
+                            sudokuBoard[4][7] <= 4'd7; fixedBoard[4][7] <= 1'b1;
+                            sudokuBoard[5][0] <= 4'd7; fixedBoard[5][0] <= 1'b1;
+                            sudokuBoard[5][2] <= 4'd6; fixedBoard[5][2] <= 1'b1;
+                            sudokuBoard[5][3] <= 4'd4; fixedBoard[5][3] <= 1'b1;
+                            sudokuBoard[5][5] <= 4'd5; fixedBoard[5][5] <= 1'b1;
+                            sudokuBoard[5][6] <= 4'd9; fixedBoard[5][6] <= 1'b1;
+                            sudokuBoard[5][8] <= 4'd8; fixedBoard[5][8] <= 1'b1;
+                            sudokuBoard[6][0] <= 4'd4; fixedBoard[6][0] <= 1'b1;
+                            sudokuBoard[6][1] <= 4'd8; fixedBoard[6][1] <= 1'b1;
+                            sudokuBoard[6][3] <= 4'd7; fixedBoard[6][3] <= 1'b1;
+                            sudokuBoard[6][5] <= 4'd6; fixedBoard[6][5] <= 1'b1;
+                            sudokuBoard[6][7] <= 4'd1; fixedBoard[6][7] <= 1'b1;
+                            sudokuBoard[6][8] <= 4'd9; fixedBoard[6][8] <= 1'b1;
+                            sudokuBoard[7][0] <= 4'd6; fixedBoard[7][0] <= 1'b1;
+                            sudokuBoard[7][1] <= 4'd9; fixedBoard[7][1] <= 1'b1;
+                            sudokuBoard[7][4] <= 4'd1; fixedBoard[7][4] <= 1'b1;
+                            sudokuBoard[7][6] <= 4'd8; fixedBoard[7][6] <= 1'b1;
+                            sudokuBoard[7][8] <= 4'd7; fixedBoard[7][8] <= 1'b1;
+                            sudokuBoard[8][0] <= 4'd3; fixedBoard[8][0] <= 1'b1;
+                            sudokuBoard[8][1] <= 4'd7; fixedBoard[8][1] <= 1'b1;
+                            sudokuBoard[8][3] <= 4'd5; fixedBoard[8][3] <= 1'b1;
+                            sudokuBoard[8][5] <= 4'd8; fixedBoard[8][5] <= 1'b1;
+                            sudokuBoard[8][6] <= 4'd4; fixedBoard[8][6] <= 1'b1;
+                            sudokuBoard[8][7] <= 4'd6; fixedBoard[8][7] <= 1'b1;
+                            sudokuBoard[8][8] <= 4'd2; fixedBoard[8][8] <= 1'b1;
+
+                            // Medium solution
+                            solutionBoard[0][0] <= 4'd5; solutionBoard[0][1] <= 4'd3; solutionBoard[0][2] <= 4'd4;
+                            solutionBoard[0][3] <= 4'd6; solutionBoard[0][4] <= 4'd8; solutionBoard[0][5] <= 4'd7;
+                            solutionBoard[0][6] <= 4'd2; solutionBoard[0][7] <= 4'd9; solutionBoard[0][8] <= 4'd6;
+                            solutionBoard[1][0] <= 4'd9; solutionBoard[1][1] <= 4'd2; solutionBoard[1][2] <= 4'd8;
+                            solutionBoard[1][3] <= 4'd4; solutionBoard[1][4] <= 4'd6; solutionBoard[1][5] <= 4'd1;
+                            solutionBoard[1][6] <= 4'd7; solutionBoard[1][7] <= 4'd5; solutionBoard[1][8] <= 4'd3;
+                            solutionBoard[2][0] <= 4'd1; solutionBoard[2][1] <= 4'd6; solutionBoard[2][2] <= 4'd7;
+                            solutionBoard[2][3] <= 4'd9; solutionBoard[2][4] <= 4'd5; solutionBoard[2][5] <= 4'd3;
+                            solutionBoard[2][6] <= 4'd8; solutionBoard[2][7] <= 4'd4; solutionBoard[2][8] <= 4'd4;
+                            solutionBoard[3][0] <= 4'd8; solutionBoard[3][1] <= 4'd5; solutionBoard[3][2] <= 4'd9;
+                            solutionBoard[3][3] <= 4'd6; solutionBoard[3][4] <= 4'd7; solutionBoard[3][5] <= 4'd1;
+                            solutionBoard[3][6] <= 4'd3; solutionBoard[3][7] <= 4'd2; solutionBoard[3][8] <= 4'd5;
+                            solutionBoard[4][0] <= 4'd2; solutionBoard[4][1] <= 4'd4; solutionBoard[4][2] <= 4'd3;
+                            solutionBoard[4][3] <= 4'd8; solutionBoard[4][4] <= 4'd2; solutionBoard[4][5] <= 4'd9;
+                            solutionBoard[4][6] <= 4'd6; solutionBoard[4][7] <= 4'd7; solutionBoard[4][8] <= 4'd1;
+                            solutionBoard[5][0] <= 4'd7; solutionBoard[5][1] <= 4'd1; solutionBoard[5][2] <= 4'd6;
+                            solutionBoard[5][3] <= 4'd4; solutionBoard[5][4] <= 4'd3; solutionBoard[5][5] <= 4'd5;
+                            solutionBoard[5][6] <= 4'd9; solutionBoard[5][7] <= 4'd8; solutionBoard[5][8] <= 4'd8;
+                            solutionBoard[6][0] <= 4'd4; solutionBoard[6][1] <= 4'd8; solutionBoard[6][2] <= 4'd5;
+                            solutionBoard[6][3] <= 4'd7; solutionBoard[6][4] <= 4'd9; solutionBoard[6][5] <= 4'd6;
+                            solutionBoard[6][6] <= 4'd1; solutionBoard[6][7] <= 4'd1; solutionBoard[6][8] <= 4'd9;
+                            solutionBoard[7][0] <= 4'd6; solutionBoard[7][1] <= 4'd9; solutionBoard[7][2] <= 4'd1;
+                            solutionBoard[7][3] <= 4'd2; solutionBoard[7][4] <= 4'd1; solutionBoard[7][5] <= 4'd4;
+                            solutionBoard[7][6] <= 4'd8; solutionBoard[7][7] <= 4'd3; solutionBoard[7][8] <= 4'd7;
+                            solutionBoard[8][0] <= 4'd3; solutionBoard[8][1] <= 4'd7; solutionBoard[8][2] <= 4'd2;
+                            solutionBoard[8][3] <= 4'd5; solutionBoard[8][4] <= 4'd8; solutionBoard[8][5] <= 4'd8;
+                            solutionBoard[8][6] <= 4'd4; solutionBoard[8][7] <= 4'd6; solutionBoard[8][8] <= 4'd2;
+                        end
+                        HARD: begin
+                            // Hard puzzle (26 clues, 55 blanks)
+                            sudokuBoard[0][0] <= 4'd5; fixedBoard[0][0] <= 1'b1;
+                            sudokuBoard[0][1] <= 4'd3; fixedBoard[0][1] <= 1'b1;
+                            sudokuBoard[0][4] <= 4'd7; fixedBoard[0][4] <= 1'b1;
+                            sudokuBoard[1][0] <= 4'd6; fixedBoard[1][0] <= 1'b1;
+                            sudokuBoard[1][3] <= 4'd1; fixedBoard[1][3] <= 1'b1;
+                            sudokuBoard[1][4] <= 4'd9; fixedBoard[1][4] <= 1'b1;
+                            sudokuBoard[1][5] <= 4'd5; fixedBoard[1][5] <= 1'b1;
+                            sudokuBoard[2][1] <= 4'd9; fixedBoard[2][1] <= 1'b1;
+                            sudokuBoard[2][2] <= 4'd8; fixedBoard[2][2] <= 1'b1;
+                            sudokuBoard[3][0] <= 4'd8; fixedBoard[3][0] <= 1'b1;
+                            sudokuBoard[3][4] <= 4'd6; fixedBoard[3][4] <= 1'b1;
+                            sudokuBoard[4][0] <= 4'd4; fixedBoard[4][0] <= 1'b1;
+                            sudokuBoard[4][3] <= 4'd8; fixedBoard[4][3] <= 1'b1;
+                            sudokuBoard[4][5] <= 4'd3; fixedBoard[4][5] <= 1'b1;
+                            sudokuBoard[4][8] <= 4'd1; fixedBoard[4][8] <= 1'b1;
+                            sudokuBoard[5][4] <= 4'd2; fixedBoard[5][4] <= 1'b1;
+                            sudokuBoard[5][8] <= 4'd6; fixedBoard[5][8] <= 1'b1;
+                            sudokuBoard[6][6] <= 4'd6; fixedBoard[6][6] <= 1'b1;
+                            sudokuBoard[6][7] <= 4'd2; fixedBoard[6][7] <= 1'b1;
+                            sudokuBoard[7][3] <= 4'd4; fixedBoard[7][3] <= 1'b1;
+                            sudokuBoard[7][4] <= 4'd1; fixedBoard[7][4] <= 1'b1;
+                            sudokuBoard[7][5] <= 4'd9; fixedBoard[7][5] <= 1'b1;
+                            sudokuBoard[7][8] <= 4'd5; fixedBoard[7][8] <= 1'b1;
+                            sudokuBoard[8][4] <= 4'd8; fixedBoard[8][4] <= 1'b1;
+                            sudokuBoard[8][7] <= 4'd3; fixedBoard[8][7] <= 1'b1;
+                            sudokuBoard[8][8] <= 4'd9; fixedBoard[8][8] <= 1'b1;
+
+                            // Hard solution
+                            solutionBoard[0][0] <= 4'd5; solutionBoard[0][1] <= 4'd3; solutionBoard[0][2] <= 4'd4;
+                            solutionBoard[0][3] <= 4'd6; solutionBoard[0][4] <= 4'd7; solutionBoard[0][5] <= 4'd8;
+                            solutionBoard[0][6] <= 4'd9; solutionBoard[0][7] <= 4'd1; solutionBoard[0][8] <= 4'd2;
+                            solutionBoard[1][0] <= 4'd6; solutionBoard[1][1] <= 4'd7; solutionBoard[1][2] <= 4'd2;
+                            solutionBoard[1][3] <= 4'd1; solutionBoard[1][4] <= 4'd9; solutionBoard[1][5] <= 4'd5;
+                            solutionBoard[1][6] <= 4'd3; solutionBoard[1][7] <= 4'd4; solutionBoard[1][8] <= 4'd8;
+                            solutionBoard[2][0] <= 4'd1; solutionBoard[2][1] <= 4'd9; solutionBoard[2][2] <= 4'd8;
+                            solutionBoard[2][3] <= 4'd3; solutionBoard[2][4] <= 4'd4; solutionBoard[2][5] <= 4'd2;
+                            solutionBoard[2][6] <= 4'd5; solutionBoard[2][7] <= 4'd6; solutionBoard[2][8] <= 4'd7;
+                            solutionBoard[3][0] <= 4'd8; solutionBoard[3][1] <= 4'd5; solutionBoard[3][2] <= 4'd9;
+                            solutionBoard[3][3] <= 4'd7; solutionBoard[3][4] <= 4'd6; solutionBoard[3][5] <= 4'd1;
+                            solutionBoard[3][6] <= 4'd4; solutionBoard[3][7] <= 4'd2; solutionBoard[3][8] <= 4'd3;
+                            solutionBoard[4][0] <= 4'd4; solutionBoard[4][1] <= 4'd2; solutionBoard[4][2] <= 4'd6;
+                            solutionBoard[4][3] <= 4'd8; solutionBoard[4][4] <= 4'd5; solutionBoard[4][5] <= 4'd3;
+                            solutionBoard[4][6] <= 4'd7; solutionBoard[4][7] <= 4'd9; solutionBoard[4][8] <= 4'd1;
+                            solutionBoard[5][0] <= 4'd7; solutionBoard[5][1] <= 4'd1; solutionBoard[5][2] <= 4'd3;
+                            solutionBoard[5][3] <= 4'd9; solutionBoard[5][4] <= 4'd2; solutionBoard[5][5] <= 4'd4;
+                            solutionBoard[5][6] <= 4'd8; solutionBoard[5][7] <= 4'd5; solutionBoard[5][8] <= 4'd6;
+                            solutionBoard[6][0] <= 4'd9; solutionBoard[6][1] <= 4'd6; solutionBoard[6][2] <= 4'd1;
+                            solutionBoard[6][3] <= 4'd5; solutionBoard[6][4] <= 4'd3; solutionBoard[6][5] <= 4'd7;
+                            solutionBoard[6][6] <= 4'd2; solutionBoard[6][7] <= 4'd8; solutionBoard[6][8] <= 4'd4;
+                            solutionBoard[7][0] <= 4'd2; solutionBoard[7][1] <= 4'd8; solutionBoard[7][2] <= 4'd7;
+                            solutionBoard[7][3] <= 4'd4; solutionBoard[7][4] <= 4'd1; solutionBoard[7][5] <= 4'd9;
+                            solutionBoard[7][6] <= 4'd6; solutionBoard[7][7] <= 4'd3; solutionBoard[7][8] <= 4'd5;
+                            solutionBoard[8][0] <= 4'd3; solutionBoard[8][1] <= 4'd4; solutionBoard[8][2] <= 4'd5;
+                            solutionBoard[8][3] <= 4'd2; solutionBoard[8][4] <= 4'd8; solutionBoard[8][5] <= 4'd6;
+                            solutionBoard[8][6] <= 4'd1; solutionBoard[8][7] <= 4'd7; solutionBoard[8][8] <= 4'd9;
+                        end
+                    endcase
+                    state <= INPUT;
+                end
+                INPUT: begin
+                    // Cursor movement
+                    if (key0_short_press) begin
+                        if (cursor_row < 4'd8)
+                            cursor_row <= cursor_row + 4'd1;
+                    end
+                    if (key_press[1]) begin
+                        if (cursor_col < 4'd8)
+                            cursor_col <= cursor_col + 4'd1;
+                    end
+                    if (key_press[2]) begin
+                        if (cursor_col > 4'd0)
+                            cursor_col <= cursor_col - 4'd1;
+                    end
+                    if (key_press[3]) begin
+                        if (cursor_row > 4'd0)
+                            cursor_row <= cursor_row - 4'd1;
+                    end
+
+                    // Number input using switches SW1-SW9 (1 to 9), only for non-fixed cells
+                    if (fixedBoard[cursor_row][cursor_col] == 1'b0) begin
+                        if (sw_press[1]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd1;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd1)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[2]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd2;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd2)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[3]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd3;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd3)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[4]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd4;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd4)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[5]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd5;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd5)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[6]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd6;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd6)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[7]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd7;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd7)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[8]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd8;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd8)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                        else if (sw_press[9]) begin
+                            sudokuBoard[cursor_row][cursor_col] <= 4'd9;
+                            if (solutionBoard[cursor_row][cursor_col] == 4'd9)
+                                fixedBoard[cursor_row][cursor_col] <= 1'b1;
+                        end
+                    end
+
+                    // Level progression on puzzle completion
+                    if (puzzle_solved) begin
+                        state <= INIT;
+                        if (level == HARD)
+                            level <= EASY; // Loop back to Easy
+                        else
+                            level <= level + 2'd1; // Next level
+                    end
+                end
+                DONE: begin
+                    state <= INPUT;
+                end
+                default: begin
+                    state <= IMAGE;
+                end
+            endcase
+        end
+    end
+
+    reg  [7:0]  xAddr;
+    reg  [8:0]  yAddr;
+    reg  [15:0] pixelData;
+    wire        pixelReady;
+    reg         pixelWrite;
+
+    // LT24 driver instantiation
+    LT24Display #(
+        .WIDTH       (LCD_WIDTH),
+        .HEIGHT      (LCD_HEIGHT),
+        .CLOCK_FREQ  (50000000)
+    ) Display (
+        .clock        (clock),
+        .globalReset  (reset_signal),
+        .resetApp     (resetApp),
+        .xAddr        (xAddr),
+        .yAddr        (yAddr),
+        .pixelData    (pixelData),
+        .pixelWrite   (pixelWrite),
+        .pixelReady   (pixelReady),
+        .pixelRawMode (1'b0),
+        .cmdData      (8'b0),
+        .cmdWrite     (1'b0),
+        .cmdDone      (1'b0),
+        .cmdReady     (),
+        .LT24Wr_n     (LT24Wr_n),
+        .LT24Rd_n     (LT24Rd_n),
+        .LT24CS_n     (LT24CS_n),
+        .LT24RS       (LT24RS),
+        .LT24Reset_n  (LT24Reset_n),
+        .LT24Data     (LT24Data),
+        .LT24LCDOn    (LT24LCDOn)
+    );
+
+    // Counters to scan pixels
+    wire [7:0] xCount;
+    UpCounterNbit #(.WIDTH(8), .MAX_VALUE(LCD_WIDTH-1)) xCounter (
+        .clock(clock),
+        .reset(resetApp),
+        .enable(pixelReady),
+        .countValue(xCount)
+    );
+
+    wire [8:0] yCount;
+    wire yEnable = pixelReady && (xCount == (LCD_WIDTH - 1));
+    UpCounterNbit #(.WIDTH(9), .MAX_VALUE(LCD_HEIGHT-1)) yCounter (
+        .clock(clock),
+        .reset(resetApp),
+        .enable(yEnable),
+        .countValue(yCount)
+    );
+
+    always @(posedge clock or posedge resetApp) begin
+        if (resetApp)
+            pixelWrite <= 1'b0;
+        else
+            pixelWrite <= 1'b1;
+    end
+
+    // Calculate cell coordinates and local pixel within cell for Sudoku
+    wire [31:0] cellX_full = (xCount - MARGIN_X) / CELL_SIZE;
+    wire [31:0] cellY_full = (yCount - MARGIN_Y) / CELL_SIZE;
+
+    wire [3:0] cellX = (xCount < MARGIN_X) ? 4'd0 :
+                       (xCount >= MARGIN_X + GRID_SIZE) ? 4'd8 :
+                       cellX_full[3:0];
+
+    wire [3:0] cellY = (yCount < MARGIN_Y) ? 4'd0 :
+                       (yCount >= MARGIN_Y + GRID_SIZE) ? 4'd8 :
+                       cellY_full[3:0];
+
+    wire [31:0] localX_full = (xCount - MARGIN_X) % CELL_SIZE;
+    wire [31:0] localY_full = (yCount - MARGIN_Y) % CELL_SIZE;
+
+    wire [4:0] localX = (xCount < MARGIN_X || xCount >= MARGIN_X + GRID_SIZE) ? 5'd0 :
+                        localX_full[4:0];
+
+    wire [4:0] localY = (yCount < MARGIN_Y || yCount >= MARGIN_Y + GRID_SIZE) ? 5'd0 :
+                        localY_full[4:0];
+
+    // Font ROM for digits 0-9, 8x8 pixels per character
+    wire [7:0] font_row;
+    reg [3:0] digit;
+    reg [2:0] font_x, font_y;
+
+    // Intermediate calculations for font_x and font_y
+    wire [4:0] font_x_temp = localX - 5'd9;
+    wire [4:0] font_y_temp = localY - 5'd9;
+
+    always @* begin
+        digit = sudokuBoard[cellY][cellX];
+        if (localX >= 5'd9 && localX < 5'd17 && localY >= 5'd9 && localY < 5'd17) begin
+            font_x = font_x_temp[2:0];
+            font_y = font_y_temp[2:0];
+        end else begin
+            font_x = 3'd0;
+            font_y = 3'd0;
+        end
+    end
+
+    font_rom_digits font_rom_inst (
+        .char(digit),
+        .row(font_y),
+        .pixels(font_row)
+    );
+
+    // Cursor highlighting
+    wire is_cursor_cell = (cellX == cursor_col && cellY == cursor_row);
+
+    // Synchronous RAM read for imageRAM
+    wire [16:0] pixelIndex = (yCount * LCD_WIDTH) + xCount;
+    always @(posedge clock or posedge resetApp) begin
+        if (resetApp) begin
+            ram_addr <= 17'd0;
+            ram_data <= 16'd0;
+        end else if (pixelReady) begin
+            ram_addr <= pixelIndex < TOTAL_PIXELS ? pixelIndex : 17'd0;
+            ram_data <= imageRAM[ram_addr];
+        end
+    end
+
+    // Pixel rendering for image and Sudoku
+    always @(posedge clock or posedge resetApp) begin
+        if (resetApp) begin
+            pixelData <= 16'd0;
+            xAddr <= 8'd0;
+            yAddr <= 9'd0;
+        end else if (pixelReady) begin
+            xAddr <= xCount;
+            yAddr <= yCount;
+
+            if (state == IMAGE) begin
+                pixelData <= ram_data;
+            end else begin
+                // Default background color (black)
+                pixelData <= 16'b00000_000000_00000;
+
+                // Draw outer border (2 pixels wide, white)
+                if (xCount >= MARGIN_X - 2 && xCount < MARGIN_X + GRID_SIZE + 2 &&
+                    yCount >= MARGIN_Y - 2 && yCount < MARGIN_Y + GRID_SIZE + 2 &&
+                    (xCount < MARGIN_X || xCount >= MARGIN_X + GRID_SIZE ||
+                     yCount < MARGIN_Y || yCount >= MARGIN_Y + GRID_SIZE)) begin
+                    pixelData <= 16'hFFFF; // White
+                end
+
+                // Draw grid lines within grid boundaries
+                if (xCount >= MARGIN_X && xCount < MARGIN_X + GRID_SIZE &&
+                    yCount >= MARGIN_Y && yCount < MARGIN_Y + GRID_SIZE) begin
+                    // Thin grid lines (dark gray)
+                    if (localX == 5'd0 || localX == CELL_SIZE - 5'd1 ||
+                        localY == 5'd0 || localY == CELL_SIZE - 5'd1) begin
+                        pixelData <= 16'h8410; // Dark gray
+                    end
+                    // Thick grid lines for 3x3 blocks (white)
+                    if ((localX == 5'd0 && (cellX == 4'd3 || cellX == 4'd6)) ||
+                        (localY == 5'd0 && (cellY == 4'd3 || cellY == 4'd6))) begin
+                        pixelData <= 16'hFFFF; // White
+                    end
+                end
+
+                // Highlight cursor cell with light blue background
+                if (is_cursor_cell && xCount >= MARGIN_X && xCount < MARGIN_X + GRID_SIZE &&
+                    yCount >= MARGIN_Y && yCount < MARGIN_Y + GRID_SIZE &&
+                    !(localX >= 5'd9 && localX < 5'd17 && localY >= 5'd9 && localY < 5'd17 && font_row[7 - font_x])) begin
+                    pixelData <= 16'h07FF; // Light blue
+                end
+
+                // Draw numbers in the 8x8 font area, centered in each cell
+                if (xCount >= MARGIN_X && xCount < MARGIN_X + GRID_SIZE &&
+                    yCount >= MARGIN_Y && yCount < MARGIN_Y + GRID_SIZE &&
+                    digit != 4'd0 &&
+                    localX >= 5'd9 && localX < 5'd17 &&
+                    localY >= 5'd9 && localY < 5'd17) begin
+                    if (font_row[7 - font_x]) begin
+                        // Fixed numbers in green, user numbers in red
+                        pixelData <= (fixedBoard[cellY][cellX]) ? 16'h07E0 : 16'hF800;
+                    end
+                end
+            end
+        end
+    end
+endmodule

@@ -1,0 +1,34 @@
+module font_rom_digits(
+    input [3:0] char, // 0-9
+    input [2:0] row, // 0-7
+    output reg [7:0] pixels
+);
+always @* begin
+    case (char)
+        4'd0: case(row)
+            0: pixels = 8'b00111100;
+            1: pixels = 8'b01100110;
+            2: pixels = 8'b01101110;
+            3: pixels = 8'b01110110;
+            4: pixels = 8'b01100110;
+            5: pixels = 8'b01100110;
+            6: pixels = 8'b00111100;
+            7: pixels = 8'b00000000;
+            default: pixels = 8'b0;
+        endcase
+        4'd1: case(row)
+            0: pixels = 8'b00011000;
+            1: pixels = 8'b00111000;
+            2: pixels = 8'b00011000;
+            3: pixels = 8'b00011000;
+            4: pixels = 8'b00011000;
+            5: pixels = 8'b00011000;
+            6: pixels = 8'b00111100;
+            7: pixels = 8'b00000000;
+            default: pixels = 8'b0;
+        endcase
+        // Add cases for 2-9 as needed
+        default: pixels = 8'b0;
+    endcase
+end
+endmodule

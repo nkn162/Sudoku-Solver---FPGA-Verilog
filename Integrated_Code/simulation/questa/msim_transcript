@@ -1,0 +1,97 @@
+# Reading pref.tcl
+# Reading C:/Users/Neeraj/modelsim.tcl
+# do Integrated_Code_run_msim_rtl_verilog.do
+# if {[file exists rtl_work]} {
+# 	vdel -lib rtl_work -all
+# }
+# vlib rtl_work
+# vmap work rtl_work
+# Model Technology ModelSim - Intel FPGA Edition vmap 2020.1 Lib Mapping Utility 2020.02 Feb 28 2020
+# vmap work rtl_work 
+# Copying C:/intelFPGA/20.1/modelsim_ase/win32aloem/../modelsim.ini to modelsim.ini
+# Modifying modelsim.ini
+# 
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:38 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/UpCounterNbit.v 
+# -- Compiling module UpCounterNbit
+# 
+# Top level modules:
+# 	UpCounterNbit
+# End time: 19:22:38 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:39 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/LT24Display.v 
+# -- Compiling module LT24Display
+# -- Compiling module LT24DisplayInterface
+# -- Compiling module ResetSynchroniser
+# -- Compiling module LT24InitialData
+# 
+# Top level modules:
+# 	LT24Display
+# End time: 19:22:39 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:39 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/font_rom_digits.v 
+# -- Compiling module font_rom_digits
+# 
+# Top level modules:
+# 	font_rom_digits
+# End time: 19:22:39 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:39 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/debounce.v 
+# -- Compiling module debounce
+# 
+# Top level modules:
+# 	debounce
+# End time: 19:22:39 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:39 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v 
+# -- Compiling module Integrated_Code_tb
+# 
+# Top level modules:
+# 	Integrated_Code_tb
+# End time: 19:22:39 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vlog -vlog01compat -work work +incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code {C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v}
+# Model Technology ModelSim - Intel FPGA Edition vlog 2020.1 Compiler 2020.02 Feb 28 2020
+# Start time: 19:22:39 on May 15,2025
+# vlog -reportprogress 300 -vlog01compat -work work "+incdir+C:/Users/Neeraj/Workspace/FPGA/Integrated_Code" C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code.v 
+# -- Compiling module Integrated_Code
+# 
+# Top level modules:
+# 	Integrated_Code
+# End time: 19:22:39 on May 15,2025, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# 
+vsim -gui -l msim_transcript work.Integrated_Code_tb
+# vsim -gui -l msim_transcript work.Integrated_Code_tb 
+# Start time: 19:22:58 on May 15,2025
+# Loading work.Integrated_Code_tb
+# Loading work.Integrated_Code
+# Loading work.LT24Display
+# Loading work.ResetSynchroniser
+# Loading work.LT24InitialData
+# Loading work.LT24DisplayInterface
+# Loading work.UpCounterNbit
+# Loading work.font_rom_digits
+# Loading work.debounce
+add wave *
+run -all
+# ** Note: $finish    : C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v(73)
+#    Time: 1250 ns  Iteration: 0  Instance: /Integrated_Code_tb
+# 1
+# Break in Module Integrated_Code_tb at C:/Users/Neeraj/Workspace/FPGA/Integrated_Code/Integrated_Code_tb.v line 73
+# End time: 19:23:55 on May 15,2025, Elapsed time: 0:00:57
+# Errors: 0, Warnings: 0
